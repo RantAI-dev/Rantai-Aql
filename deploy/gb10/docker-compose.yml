@@ -1,0 +1,44 @@
+# RantAI GB10 (DGX Spark) profile: System 1 and System 2 on vLLM GPU, the Nafs-Aql gateway in front.
+#   echo "$(openssl rand -hex 24)" > ../docker/secrets/nafs_tokens
+#   docker compose -f deploy/gb10/docker-compose.yml up -d        # from the repository root
+# Unlike deploy/docker (vLLM CPU, x86 AVX-512), this runs on the ARM64 GB10 with its GPU. Smiley Core is not used:
+# its kernels are AVX2-only and fall back to scalar code on ARM, so ShadowPrefill is not available on this profile.
+name: rantai-aql
+x-vllm: &vllm
+  image: vllm/vllm-openai:cu130-nightly
+  entrypoint: ["vllm", "serve"]
+  environment: {VLLM_ENABLE_CUDA_COMPATIBILITY: "0"}
+  volumes: ["hf-cache:/root/.cache/huggingface"]
+  ipc: host
+  shm_size: 2gb
+  deploy: {resources: {reservations: {devices: [{driver: nvidia, count: all, capabilities: [gpu]}]}}}
+  restart: unless-stopped
+services:
+  aql-s1:
+    <<: *vllm
+    # No --reasoning-parser here: System 1 never thinks, and with the qwen3 parser vLLM nightly streams the whole
+    # answer as reasoning even when enable_thinking is false, so the gateway saw an empty draft.
+    command: ["Qwen/Qwen3-1.7B", "--served-model-name", "system1", "--port", "8001", "--dtype", "bfloat16",
+              "--max-model-len", "8192", "--max-num-seqs", "4", "--enable-prefix-caching", "--max-logprobs", "5",
+              "--gpu-memory-utilization", "0.08"]
+  aql-s2:
+    <<: *vllm
+    command: ["Qwen/Qwen3-4B-Thinking-2507", "--served-model-name", "system2", "--port", "8002", "--dtype", "bfloat16",
+              "--max-model-len", "8192", "--max-num-seqs", "2", "--enable-prefix-caching", "--reasoning-parser", "qwen3",
+              "--max-logprobs", "5", "--gpu-memory-utilization", "0.12"]
+  gateway:
+    build: {context: ../.., dockerfile: deploy/docker/Dockerfile.gateway}
+    image: rantai-aql/gateway:dev
+    environment:
+      NAFS_BIND: "0.0.0.0:8080"
+      NAFS_CONFIG: /app/config/rantai-aql.gb10.toml
+      NAFS_AUTH_TOKENS_FILE: /run/secrets/nafs_tokens
+    secrets: [nafs_tokens]
+    security_opt: ["seccomp=unconfined", "apparmor=unconfined"]   # the verifier sandbox needs namespaces (see deploy/docker)
+    ports: ["8096:8080"]
+    volumes: ["aql-data:/app/data/runtime"]
+    depends_on: [aql-s1, aql-s2]
+    restart: unless-stopped
+secrets:
+  nafs_tokens: {file: ../docker/secrets/nafs_tokens}
+volumes: {hf-cache: {}, aql-data: {}}
