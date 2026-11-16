@@ -1,0 +1,66 @@
+{
+ "off": [
+  {
+   "ttft_ms": 18437,
+   "prompt_tokens": 6862,
+   "deliberate_ms": 23666,
+   "wall_ms": 81281
+  },
+  {
+   "ttft_ms": 419,
+   "prompt_tokens": 6881,
+   "deliberate_ms": 27453,
+   "wall_ms": 67005
+  },
+  {
+   "ttft_ms": 421,
+   "prompt_tokens": 6872,
+   "deliberate_ms": 31234,
+   "wall_ms": 71585
+  },
+  {
+   "ttft_ms": 422,
+   "prompt_tokens": 6891,
+   "deliberate_ms": 37481,
+   "wall_ms": 77140
+  },
+  {
+   "ttft_ms": 422,
+   "prompt_tokens": 6885,
+   "deliberate_ms": 36302,
+   "wall_ms": 75937
+  }
+ ],
+ "between": [
+  {
+   "ttft_ms": 69,
+   "prompt_tokens": 6880,
+   "deliberate_ms": 37478,
+   "wall_ms": 76896
+  },
+  {
+   "ttft_ms": 69,
+   "prompt_tokens": 6878,
+   "deliberate_ms": 33785,
+   "wall_ms": 76584
+  },
+  {
+   "ttft_ms": 69,
+   "prompt_tokens": 6873,
+   "deliberate_ms": 37736,
+   "wall_ms": 77816
+  },
+  {
+   "ttft_ms": 71,
+   "prompt_tokens": 6887,
+   "deliberate_ms": 35918,
+   "wall_ms": 75617
+  },
+  {
+   "ttft_ms": 70,
+   "prompt_tokens": 6866,
+   "deliberate_ms": 40622,
+   "wall_ms": 80158
+  }
+ ]
+}

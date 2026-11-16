@@ -48,6 +48,19 @@ README reports on the CPU reference (36 %).
 
 About **14×** faster at the same accuracy (the GPU runs BF16 weights, the CPU run Q4_K_M).
 
+**ShadowPrefill on vLLM** (`benchmarks/gb10_shadow_prefill_vllm.json`): a two-turn conversation with a ~3,200-token
+first turn answered by System 1, then a question forced to System 2, five times each with `shadow: off` and
+`shadow: between` (each trial uses a fresh random text, so nothing is cached across trials).
+
+| | System 2 first token (median) | Shadow cost |
+|---|---|---|
+| `shadow: off` | 422 ms (one cold start at 18.4 s) | – |
+| `shadow: between` | **69 ms** | 0.41 s of idle time while the answer is read; 3,240 tokens read |
+
+On the GPU the switch saves about a third of a second, against 35 s on the CPU reference (37 s → 2 s), because a
+GPU reads a prompt about a hundred times faster. The answer's total time is dominated by System 2's reasoning
+(30–40 s) either way.
+
 ## Notes
 
 - **ShadowPrefill on vLLM.** The gateway now sends shadows to vLLM backends too (`Backend::supports_shadow`): a
