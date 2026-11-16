@@ -874,7 +874,9 @@ impl Backend {
         }
         // vLLM: the whole prompt, and how much of it was already cached (reported with --enable-prompt-tokens-details).
         let prompt = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
-        let cached = v["usage"]["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0);
+        let cached = v["usage"]["prompt_tokens_details"]["cached_tokens"]
+            .as_u64()
+            .unwrap_or(0);
         Ok((prompt.saturating_sub(cached), cached))
     }
 
@@ -1092,7 +1094,10 @@ mod shadow_tests {
         Backend::new("system2", kind, cfg, RetryCfg::default())
     }
     fn msg(role: &str, content: &str) -> Message {
-        Message { role: role.into(), content: content.into() }
+        Message {
+            role: role.into(),
+            content: content.into(),
+        }
     }
 
     #[test]
@@ -1107,7 +1112,10 @@ mod shadow_tests {
         let conv = [msg("user", "q"), msg("assistant", "a")];
         let b = backend("vllm").shadow_body(&conv, true, 0.25);
         assert_eq!(b["max_tokens"], 1);
-        assert!(b.get("shadow").is_none(), "vLLM would reject an unknown field");
+        assert!(
+            b.get("shadow").is_none(),
+            "vLLM would reject an unknown field"
+        );
         assert_eq!(b["add_generation_prompt"], false);
         assert_eq!(b["chat_template_kwargs"]["enable_thinking"], true);
         // An arrival shadow reads the prompt as the real request will send it: with its generation prompt.
