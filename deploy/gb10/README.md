@@ -24,6 +24,30 @@ SymPy). Knowledge base, embeddings and ShadowPrefill are off on this profile.
 
 The last row is the documented limit of agreement: samples that agree on a wrong answer still read as consensus.
 
+## Benchmarks on the GB10 (16 Nov 2026)
+
+Stored runs: `benchmarks/gb10_gsm8k60_three_systems.json`, `benchmarks/gb10_regression120_fast_only.json`.
+
+**GSM8K, 60 questions (seed 0, shuffled), three strategies on the same questions:**
+
+| Strategy | Correct | Median | Mean | Total | Escalated | Reasoning tokens |
+|---|---|---|---|---|---|---|
+| `fast_only` (System 1) | 49/60 | 2.4 s | 3.0 s | 3.0 min | 0 | 0 |
+| `nafs_aql` (gate) | **59/60** | 2.6 s | 12.0 s | **12.0 min** | 11 | 9,764 |
+| `slow_only` (System 2) | 59/60 | 28.8 s | 32.6 s | 32.6 min | 60 | 34,551 |
+
+The gate matches always-thinking accuracy at **37 % of its time** (28 % of its reasoning tokens), the same ratio the
+README reports on the CPU reference (36 %).
+
+**Regression set, 120 items, System 1 only, against the stored CPU run** (`benchmarks/rollback_drill/candidate_run_3cca7cad.json`):
+
+| Machine | Correct | Median per item | Total |
+|---|---|---|---|
+| i3-8100, 4 cores, Smiley Core GGUF Q4_K_M | 85/120 | 36.5 s | 77.1 min |
+| GB10 GPU, vLLM BF16 | 89/120 | 2.5 s | 5.7 min |
+
+About **14×** faster at the same accuracy (the GPU runs BF16 weights, the CPU run Q4_K_M).
+
 ## Notes
 
 - **Smiley Core on ARM.** `smiley-core` has AVX2 kernels only (`simd.rs` is `x86_64`-only); on ARM it compiles to the
