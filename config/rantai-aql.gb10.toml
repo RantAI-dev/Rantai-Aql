@@ -156,7 +156,7 @@ min_score = 0.35
 skills_in_chat = true                  # a question that asks how to do a task carries the saved skill that matches it
 commit_idle_minutes = 0                # save a chat as a file (transcript and memories) once quiet this many minutes (0 = only on request)
 
-[shadow]                               # Phase 30: ShadowPrefill - the model a conversation may switch to reads it in unused time (Smiley Core only)
+[shadow]                               # Phase 30: ShadowPrefill - the model a conversation may switch to reads it in unused time (Smiley Core, and vLLM through its prefix cache)
 between_turns = true                   # after a reply, while nothing else runs, the model that did not answer reads the conversation
 idle_delay_ms = 1500                   # wait this long after a reply, with nothing in flight, before starting
 at_arrival = false                     # while the quick model drafts, the reasoning model reads the same prompt (both share the cores)

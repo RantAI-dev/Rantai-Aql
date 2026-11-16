@@ -816,9 +816,28 @@ impl Backend {
         self.kind == "llama"
     }
 
-    /// ShadowPrefill (Phase 30) is a Smiley Core server feature (`"shadow"` on a chat completion).
+    /// ShadowPrefill (Phase 30) began as a Smiley Core server feature (`"shadow"` on a chat completion). vLLM takes
+    /// it too, as an ordinary one-token request whose prompt lands in its prefix cache (RantAI GB10 profile; the
+    /// server must run with `--enable-prefix-caching`).
     pub fn supports_shadow(&self) -> bool {
-        self.kind == "smiley"
+        self.kind == "smiley" || self.kind == "vllm"
+    }
+
+    /// The body of a shadow read. Smiley Core takes `"shadow": {"duty": d}` and reads at its lowest priority. vLLM
+    /// has no priority classes: its shadow is a plain one-token request, and a conversation that ends with the
+    /// assistant's turn is rendered without a generation prompt, so the cached tokens are exactly the start of the
+    /// next turn's prompt.
+    fn shadow_body(&self, messages: &[Message], thinking: bool, duty: f32) -> Value {
+        let mut b = json!({
+            "model": self.cfg.model, "messages": messages, "max_tokens": 1, "temperature": 0.0,
+            "chat_template_kwargs": {"enable_thinking": thinking},
+        });
+        if self.kind == "smiley" {
+            b["shadow"] = json!({"duty": duty.clamp(0.05, 1.0)});
+        } else if messages.last().is_some_and(|m| m.role == "assistant") {
+            b["add_generation_prompt"] = json!(false);
+        }
+        b
     }
 
     /// ShadowPrefill: ask the server to read `messages` into its cache at the lowest priority, for a request that may
@@ -834,11 +853,7 @@ impl Backend {
         if !self.supports_shadow() {
             return Ok((0, 0));
         }
-        let body = json!({
-            "model": self.cfg.model, "messages": messages, "max_tokens": 1, "temperature": 0.0,
-            "chat_template_kwargs": {"enable_thinking": thinking},
-            "shadow": {"duty": duty.clamp(0.05, 1.0)},
-        });
+        let body = self.shadow_body(messages, thinking, duty);
         let url = format!("{}/chat/completions", self.cfg.url.trim_end_matches('/'));
         let resp = self
             .client
@@ -851,10 +866,16 @@ impl Backend {
             .json()
             .await
             .map_err(|e| NafsError::BackendProtocol(format!("{}: {e}", self.role)))?;
-        Ok((
-            v["timings"]["prompt_n"].as_u64().unwrap_or(0),
-            v["timings"]["cache_n"].as_u64().unwrap_or(0),
-        ))
+        if self.kind == "smiley" {
+            return Ok((
+                v["timings"]["prompt_n"].as_u64().unwrap_or(0),
+                v["timings"]["cache_n"].as_u64().unwrap_or(0),
+            ));
+        }
+        // vLLM: the whole prompt, and how much of it was already cached (reported with --enable-prompt-tokens-details).
+        let prompt = v["usage"]["prompt_tokens"].as_u64().unwrap_or(0);
+        let cached = v["usage"]["prompt_tokens_details"]["cached_tokens"].as_u64().unwrap_or(0);
+        Ok((prompt.saturating_sub(cached), cached))
     }
 
     /// Raw continuation with a cached prefix is a llama-server feature (`/completion`, `/apply-template`).
@@ -1051,6 +1072,55 @@ fn finish(out: &mut GenOutput, t0: Instant) {
         out.reasoning_tokens = out.completion_tokens;
     }
     out.content = out.content.trim().to_string();
+}
+
+#[cfg(test)]
+mod shadow_tests {
+    use super::Backend;
+    use crate::config::{EndpointCfg, RetryCfg};
+    use nafs_types::Message;
+
+    fn backend(kind: &str) -> Backend {
+        let cfg = EndpointCfg {
+            url: "http://aql-s2:8002/v1".into(),
+            model: "system2".into(),
+            hf_id: "Qwen/Qwen3-4B-Thinking-2507".into(),
+            quantization: String::new(),
+            thinking: true,
+            max_in_flight: 2,
+        };
+        Backend::new("system2", kind, cfg, RetryCfg::default())
+    }
+    fn msg(role: &str, content: &str) -> Message {
+        Message { role: role.into(), content: content.into() }
+    }
+
+    #[test]
+    fn vllm_and_smiley_take_shadows_llama_does_not() {
+        assert!(backend("vllm").supports_shadow());
+        assert!(backend("smiley").supports_shadow());
+        assert!(!backend("llama").supports_shadow());
+    }
+
+    #[test]
+    fn vllm_shadow_is_a_plain_one_token_read_without_a_generation_prompt_after_a_reply() {
+        let conv = [msg("user", "q"), msg("assistant", "a")];
+        let b = backend("vllm").shadow_body(&conv, true, 0.25);
+        assert_eq!(b["max_tokens"], 1);
+        assert!(b.get("shadow").is_none(), "vLLM would reject an unknown field");
+        assert_eq!(b["add_generation_prompt"], false);
+        assert_eq!(b["chat_template_kwargs"]["enable_thinking"], true);
+        // An arrival shadow reads the prompt as the real request will send it: with its generation prompt.
+        let b = backend("vllm").shadow_body(&conv[..1], true, 0.25);
+        assert!(b.get("add_generation_prompt").is_none());
+    }
+
+    #[test]
+    fn smiley_shadow_keeps_its_duty_field() {
+        let b = backend("smiley").shadow_body(&[msg("user", "q")], false, 3.0);
+        assert_eq!(b["shadow"]["duty"], 1.0);
+        assert!(b.get("add_generation_prompt").is_none());
+    }
 }
 
 #[cfg(test)]

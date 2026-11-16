@@ -50,6 +50,11 @@ About **14×** faster at the same accuracy (the GPU runs BF16 weights, the CPU r
 
 ## Notes
 
+- **ShadowPrefill on vLLM.** The gateway now sends shadows to vLLM backends too (`Backend::supports_shadow`): a
+  one-token request whose prompt lands in vLLM's prefix cache, rendered without a generation prompt when it ends with
+  the assistant's reply, so the next turn's prompt starts with exactly the cached tokens. vLLM has no priority classes,
+  so there is no duty cap; on the GPU a prefill costs little. `--enable-prompt-tokens-details` lets the shadow report
+  how much was already cached.
 - **Smiley Core on ARM.** `smiley-core` has AVX2 kernels only (`simd.rs` is `x86_64`-only); on ARM it compiles to the
   scalar path, which its own documentation measures as compute-bound. A NEON port is needed before the CPU profile and
   ShadowPrefill can run here.
