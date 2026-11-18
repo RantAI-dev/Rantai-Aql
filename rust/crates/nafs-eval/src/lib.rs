@@ -64,7 +64,7 @@ fn d_systems() -> Vec<String> {
     vec!["nafs_aql".into(), "fast_only".into(), "slow_only".into()]
 }
 
-pub const FIXED_SYSTEMS: [&str; 11] = [
+pub const FIXED_SYSTEMS: [&str; 12] = [
     "nafs_aql",
     "nafs_blind",
     "fast_only",
@@ -76,6 +76,8 @@ pub const FIXED_SYSTEMS: [&str; 11] = [
     "slow_exit_posterior",
     "slow_exit_all",
     "slow_exit_all_decay",
+    // RantAI D5: decide before answering (Semantic Router style), see `route_before_answer`.
+    "pre_route",
 ];
 
 /// Gated systems: `nafs_aql`, `nafs_blind`, and their lambda variants `nafs_aql_l<NN>` /
@@ -270,6 +272,46 @@ fn enum_str<T: Serialize>(v: T) -> String {
         .unwrap_or_default()
 }
 
+/// The question System 1 is asked before anything is answered (`pre_route`).
+pub const PRE_ROUTE_PROMPT: &str = "You are a router. Read the question and decide whether a small, fast model can answer it correctly in one short step, or whether it needs careful multi-step reasoning (several calculations, code, a proof, a tricky constraint).\n\nQuestion:\n{q}\n\nReply with exactly one word: fast or careful.";
+
+/// RantAI D5: the "decide before answering" strategy, after vLLM Semantic Router ("When to Reason",
+/// arXiv 2510.08731). Unlike the gate, which judges System 1's draft, this decides from the question alone: System 1
+/// gets one short classification request (no reasoning, greedy, two tokens) and the question then goes to System 1
+/// or System 2 directly. Returns (send to System 2, router milliseconds, router error). A router that fails sends the
+/// question to System 2, so a broken router costs time, never accuracy.
+pub async fn route_before_answer(
+    orch: &Orchestrator,
+    question: &str,
+) -> (bool, u64, Option<String>) {
+    let pair = orch.active();
+    let req = nafs_core::backend::GenRequest {
+        messages: vec![Message {
+            role: "user".into(),
+            content: PRE_ROUTE_PROMPT.replace("{q}", question),
+        }],
+        max_tokens: 2,
+        temperature: 0.0,
+        top_p: 1.0,
+        thinking: Some(false),
+        ..Default::default()
+    };
+    let t0 = Instant::now();
+    match pair.s1.complete(&req).await {
+        Ok(out) => (
+            route_verdict(&out.content),
+            t0.elapsed().as_millis() as u64,
+            None,
+        ),
+        Err(e) => (true, t0.elapsed().as_millis() as u64, Some(e.to_string())),
+    }
+}
+
+/// System 2 unless the router clearly said "fast".
+pub fn route_verdict(reply: &str) -> bool {
+    !reply.trim().to_ascii_lowercase().starts_with("fast")
+}
+
 /// Run one item of one system.
 pub async fn run_item(
     orch: &Orchestrator,
@@ -281,6 +323,11 @@ pub async fn run_item(
     let (blind, sys_lambda) = gated(sys).unwrap_or((false, None));
     let conditioned = sys == "slow_conditioned";
     let sweep = sweep_budget(sys);
+    let route = if sys == "pre_route" {
+        Some(route_before_answer(orch, &t.prompt).await)
+    } else {
+        None
+    };
     let creq = ChatRequest {
         messages: vec![Message {
             role: "user".into(),
@@ -297,6 +344,8 @@ pub async fn run_item(
             | "slow_exit_all"
             | "slow_exit_all_decay" => Some(ReasoningMode::Slow),
             _ if sweep.is_some() => Some(ReasoningMode::Slow),
+            "pre_route" if route.as_ref().is_some_and(|r| r.0) => Some(ReasoningMode::Slow),
+            "pre_route" => Some(ReasoningMode::Fast),
             _ => None,
         },
         lambda: sys_lambda.or(req.lambda),
@@ -384,21 +433,28 @@ pub async fn run_item(
             "fast".into()
         },
         assurance: enum_str(reply.assurance),
-        escalated: reply.decision.escalate,
-        wall_ms: reply.usage.wall_ms,
+        // pre_route: "escalated" means the router sent the question to System 2; its own time and call count.
+        escalated: route.as_ref().map_or(reply.decision.escalate, |r| r.0),
+        wall_ms: reply.usage.wall_ms + route.as_ref().map_or(0, |r| r.1),
         ttft_ms: reply.usage.ttft_ms,
-        model_calls: reply.usage.model_calls,
+        model_calls: reply.usage.model_calls + u32::from(route.is_some()),
         completion_tokens: reply.usage.completion_tokens,
         reasoning_tokens: reply.usage.reasoning_tokens,
         e1_hat: reply.decision.e1_hat,
         features: reply.decision.features.clone(),
         draft_correct,
-        rule: enum_str(reply.decision.rule),
+        rule: if route.is_some() {
+            "pre_route".into()
+        } else {
+            enum_str(reply.decision.rule)
+        },
         decision_id: reply.decision.decision_id.to_string(),
         answer_preview: answer.chars().take(400).collect(),
-        evidence: reply
-            .verifier
-            .and_then(|v| v.evidence)
+        evidence: route
+            .as_ref()
+            .and_then(|r| r.2.as_ref())
+            .map(|e| format!("router failed, sent to System 2: {e}"))
+            .or_else(|| reply.verifier.and_then(|v| v.evidence))
             .map(|e| e.chars().take(400).collect()),
         error: None,
         attempts: reply.rounds.len() as u32,
@@ -1630,5 +1686,16 @@ mod tests {
         assert!(r.validate().is_err());
         r.systems = vec!["slow_b99999".into()];
         assert!(r.validate().is_err());
+        r.systems = vec!["pre_route".into(), "fast_only".into()];
+        assert!(r.validate().is_ok());
+    }
+    #[test]
+    fn the_router_sends_to_system_2_unless_it_clearly_says_fast() {
+        assert!(!route_verdict("fast"));
+        assert!(!route_verdict(" Fast."));
+        assert!(route_verdict("careful"));
+        assert!(route_verdict(""));
+        assert!(route_verdict("I think fast"));
+        assert!(PRE_ROUTE_PROMPT.contains("{q}"));
     }
 }
